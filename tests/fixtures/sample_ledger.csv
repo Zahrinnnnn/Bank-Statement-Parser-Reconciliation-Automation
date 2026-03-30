@@ -1,0 +1,7 @@
+entry_date,description,reference,amount,entry_type,account_code,counterparty
+03/03/2026,Shopee Payment March,FPX-2026-001,250.00,DEBIT,5100,Shopee
+05/03/2026,Salary March 2026,PAYROLL-MAR-26,3500.00,CREDIT,4000,ACME SDN BHD
+08/03/2026,Transfer to Ahmad,IBG-2026-008,1000.00,DEBIT,5200,Ahmad bin Ali
+18/03/2026,TNB Utility Bill,TT123456,156.30,DEBIT,5300,Tenaga Nasional
+20/03/2026,March Rent,CHEQ000123,1500.00,DEBIT,5400,Landlord
+25/03/2026,Performance Bonus Q1,PAYROLL-BONUS,800.00,CREDIT,4100,ACME SDN BHD
