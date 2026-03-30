@@ -11,6 +11,7 @@ All SQL DDL lives here so the schema is defined in exactly one place.
 
 import sqlite3
 import logging
+from datetime import date, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,14 @@ class DatabaseConnection:
         """Open the database file, creating it if it doesn't exist."""
         # Make sure the data/ directory exists before opening the file
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Register explicit date/datetime converters so we don't rely on
+        # sqlite3's built-in type detection, which is deprecated in Python 3.12+
+        sqlite3.register_converter("DATE", lambda v: date.fromisoformat(v.decode()))
+        sqlite3.register_converter(
+            "DATETIME",
+            lambda v: datetime.fromisoformat(v.decode()),
+        )
 
         self._connection = sqlite3.connect(
             str(self.db_path),

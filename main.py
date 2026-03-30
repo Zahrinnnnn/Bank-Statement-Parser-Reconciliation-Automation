@@ -109,16 +109,95 @@ def parse(file: str, bank: str, account: str) -> None:
 @click.option("--period", required=True, help="Accounting period e.g. 2026-03.")
 def import_ledger(file: str, period: str) -> None:
     """Import internal ledger entries from a CSV file."""
-    click.echo(f"[Phase 2] import-ledger command — file: {file}, period: {period}")
+    import pandas as pd
+    from src.database.connection import get_db
+    from src.database.models import LedgerEntry, AuditLog
+    from src.database.queries import insert_ledger_entry, insert_audit_log
+    from src.utils.normaliser import parse_date, parse_amount, clean_description
+
+    df = pd.read_csv(file, dtype=str, skip_blank_lines=True)
+    df.columns = [col.strip().lower() for col in df.columns]
+
+    new_count = 0
+    skipped_count = 0
+
+    with get_db() as db:
+        conn = db.get_connection()
+
+        for _, row in df.iterrows():
+            # Required fields
+            raw_date   = str(row.get("entry_date", "")).strip()
+            raw_amount = str(row.get("amount", "")).strip()
+            description = clean_description(str(row.get("description", "")))
+            entry_type  = str(row.get("entry_type", "")).strip().upper()
+
+            entry_date = parse_date(raw_date)
+            amount = parse_amount(raw_amount)
+
+            if not entry_date or not description or not entry_type:
+                skipped_count += 1
+                continue
+
+            ledger_entry = LedgerEntry(
+                entry_date=entry_date,
+                description=description,
+                reference=clean_description(str(row.get("reference", ""))) or None,
+                amount=amount,
+                entry_type=entry_type,
+                account_code=str(row.get("account_code", "")).strip() or None,
+                counterparty=str(row.get("counterparty", "")).strip() or None,
+                source=file,
+            )
+
+            insert_ledger_entry(conn, ledger_entry)
+            new_count += 1
+
+        insert_audit_log(conn, AuditLog(
+            action="IMPORT_LEDGER",
+            entity="ledger_entries",
+            details={"file": file, "period": period, "inserted": new_count, "skipped": skipped_count},
+        ))
+
+    click.echo(f"Imported: {new_count} ledger entries  |  Skipped: {skipped_count} invalid rows")
 
 
 @cli.command()
-@click.option("--bank",    required=True,  help="Bank name.")
-@click.option("--account", required=True,  help="Account number.")
-@click.option("--period",  required=True,  help="Accounting period e.g. 2026-03.")
-def reconcile(bank: str, account: str, period: str) -> None:
+@click.option("--bank",      required=True,  help="Bank name: CIMB, HLB, MAYBANK, PUBLIC_BANK.")
+@click.option("--account",   required=False, default=None, help="Account number filter (optional).")
+@click.option("--period",    required=True,  help="Accounting period e.g. 2026-03.")
+@click.option("--tolerance", default=0.01,   help="Amount match tolerance in RM (default 0.01).")
+@click.option("--fuzzy",     default=0.80,   help="Fuzzy match threshold 0-1 (default 0.80).")
+def reconcile(bank: str, account: str, period: str, tolerance: float, fuzzy: float) -> None:
     """Run automated reconciliation for a given period and account."""
-    click.echo(f"[Phase 5] reconcile command — bank: {bank}, account: {account}, period: {period}")
+    from datetime import date
+    from src.database.connection import get_db
+    from src.reconciliation.engine import run_reconciliation
+
+    # Parse "2026-03" → first and last day of that month
+    try:
+        year, month = int(period.split("-")[0]), int(period.split("-")[1])
+    except (ValueError, IndexError):
+        click.echo(f"Invalid period format: {period!r}. Use YYYY-MM e.g. 2026-03")
+        return
+
+    import calendar
+    period_start = date(year, month, 1)
+    period_end   = date(year, month, calendar.monthrange(year, month)[1])
+
+    click.echo(f"Reconciling {bank}  {period_start} to {period_end} ...")
+
+    with get_db() as db:
+        result = run_reconciliation(
+            conn=db.get_connection(),
+            period_start=period_start,
+            period_end=period_end,
+            bank_name=bank,
+            account_number=account,
+            amount_tolerance=tolerance,
+            fuzzy_threshold=fuzzy,
+        )
+
+    click.echo(result.summary())
 
 
 @cli.command()
