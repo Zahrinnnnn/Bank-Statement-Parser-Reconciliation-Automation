@@ -8,8 +8,8 @@ get back a parser ready to call .parse() on.
 Supported banks:
     CIMB         — PDF, CSV
     HLB          — PDF, Excel (.xlsx, .xls)
-    MAYBANK      — PDF, CSV  (generic parsers until Phase 3 bank-specific work)
-    PUBLIC_BANK  — PDF, CSV  (generic parsers until Phase 3 bank-specific work)
+    MAYBANK      — PDF, CSV
+    PUBLIC_BANK  — PDF, CSV
     GENERIC      — any CSV, Excel, or PDF
 
 Usage:
@@ -54,12 +54,11 @@ def get_parser(bank_name: str, file_path: str) -> BaseParser:
     if bank == "HLB":
         return _get_hlb_parser(file_path, extension)
 
-    if bank in ("MAYBANK", "PUBLIC_BANK"):
-        # Use generic parsers for now — bank-specific parsers come later
-        logger.info(
-            "No bank-specific parser for %s yet — using generic parser.", bank
-        )
-        return _get_generic_parser(file_path, extension, bank_name=bank)
+    if bank == "MAYBANK":
+        return _get_maybank_parser(file_path, extension)
+
+    if bank == "PUBLIC_BANK":
+        return _get_public_bank_parser(file_path, extension)
 
     if bank == "GENERIC":
         return _get_generic_parser(file_path, extension, bank_name="GENERIC")
@@ -90,6 +89,28 @@ def _get_hlb_parser(file_path: str, extension: str) -> BaseParser:
         return HLBExcelParser(file_path=file_path)
 
     raise ValueError(f"HLB supports .pdf, .xlsx, and .xls files. Got: {extension}")
+
+
+def _get_maybank_parser(file_path: str, extension: str) -> BaseParser:
+    from src.parsers.maybank_parser import MaybankCSVParser, MaybankPDFParser
+
+    if extension == ".pdf":
+        return MaybankPDFParser(file_path=file_path)
+    if extension == ".csv":
+        return MaybankCSVParser(file_path=file_path)
+
+    raise ValueError(f"Maybank supports .pdf and .csv files. Got: {extension}")
+
+
+def _get_public_bank_parser(file_path: str, extension: str) -> BaseParser:
+    from src.parsers.public_bank_parser import PublicBankCSVParser, PublicBankPDFParser
+
+    if extension == ".pdf":
+        return PublicBankPDFParser(file_path=file_path)
+    if extension == ".csv":
+        return PublicBankCSVParser(file_path=file_path)
+
+    raise ValueError(f"Public Bank supports .pdf and .csv files. Got: {extension}")
 
 
 def _get_generic_parser(
