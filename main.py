@@ -367,10 +367,76 @@ def exceptions(recon_id: int) -> None:
 @cli.command()
 @click.option("--bank-txn-id", required=True, type=int, help="Bank transaction ID.")
 @click.option("--ledger-id",   required=True, type=int, help="Ledger entry ID.")
-@click.option("--note",        required=False, help="Reason for manual match.")
+@click.option("--note",        required=False, default=None, help="Reason for manual match.")
 def match(bank_txn_id: int, ledger_id: int, note: str) -> None:
     """Manually match a bank transaction to a ledger entry."""
-    click.echo(f"[Phase 5] match command — bank_txn_id: {bank_txn_id}, ledger_id: {ledger_id}")
+    from rich.console import Console
+    from src.database.models import AuditLog
+    from src.database.queries import (
+        get_bank_transaction,
+        get_ledger_entry,
+        update_bank_transaction_recon_status,
+        update_ledger_entry_recon_status,
+        insert_audit_log,
+    )
+
+    console = Console()
+
+    with get_db() as db:
+        conn = db.get_connection()
+
+        # Verify both records exist before doing anything
+        bank_txn     = get_bank_transaction(conn, bank_txn_id)
+        ledger_entry = get_ledger_entry(conn, ledger_id)
+
+        if not bank_txn:
+            console.print(f"[red]Bank transaction #{bank_txn_id} not found.[/red]")
+            return
+
+        if not ledger_entry:
+            console.print(f"[red]Ledger entry #{ledger_id} not found.[/red]")
+            return
+
+        # Warn if either record is already matched — the operator may have the wrong IDs
+        if bank_txn["recon_status"] == "MATCHED":
+            console.print(
+                f"[yellow]Warning: bank transaction #{bank_txn_id} is already MATCHED.[/yellow]"
+            )
+        if ledger_entry["recon_status"] == "MATCHED":
+            console.print(
+                f"[yellow]Warning: ledger entry #{ledger_id} is already MATCHED.[/yellow]"
+            )
+
+        # Mark both records as manually matched
+        update_bank_transaction_recon_status(conn, bank_txn_id, "MATCHED")
+        update_ledger_entry_recon_status(conn, ledger_id, "MATCHED")
+
+        # Capture the full context in the audit log so this action is traceable
+        audit_details = {
+            "bank_txn_id":        bank_txn_id,
+            "ledger_entry_id":    ledger_id,
+            "bank_description":   bank_txn["description"],
+            "ledger_description": ledger_entry["description"],
+        }
+        if note:
+            audit_details["note"] = note
+
+        insert_audit_log(conn, AuditLog(
+            action="MANUAL_MATCH",
+            entity="bank_transactions",
+            entity_id=bank_txn_id,
+            details=audit_details,
+        ))
+
+    # Truncate long descriptions so the output line stays readable
+    bank_desc   = (bank_txn["description"] or "")[:45]
+    ledger_desc = (ledger_entry["description"] or "")[:45]
+
+    console.print(
+        f"[green]Matched:[/green] "
+        f"Bank #{bank_txn_id} ({bank_desc}) "
+        f"→ Ledger #{ledger_id} ({ledger_desc})"
+    )
 
 
 @cli.command()
@@ -378,7 +444,71 @@ def match(bank_txn_id: int, ledger_id: int, note: str) -> None:
 @click.option("--output", required=True, help="Output CSV file path.")
 def export(period: str, output: str) -> None:
     """Export all transactions for a period to a CSV file."""
-    click.echo(f"[Phase 8] export command — period: {period}, output: {output}")
+    import calendar
+    from datetime import date
+    from pathlib import Path
+
+    import pandas as pd
+    from rich.console import Console
+    from src.database.queries import list_bank_transactions
+
+    console = Console()
+
+    # Parse "2026-03" → first and last day of that month
+    try:
+        year, month = int(period.split("-")[0]), int(period.split("-")[1])
+    except (ValueError, IndexError):
+        console.print(
+            f"[red]Invalid period format: {period!r}. Use YYYY-MM e.g. 2026-03[/red]"
+        )
+        return
+
+    period_start = date(year, month, 1)
+    period_end   = date(year, month, calendar.monthrange(year, month)[1])
+
+    with get_db() as db:
+        transactions = list_bank_transactions(
+            db.get_connection(),
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+    if not transactions:
+        console.print(f"[yellow]No transactions found for period {period}.[/yellow]")
+        return
+
+    # These are the columns we include in the export — internal DB fields like
+    # 'hash', 'raw_description', and 'parsed_at' are omitted as they're not
+    # meaningful to the end user.
+    export_columns = [
+        "id",
+        "bank_name",
+        "account_number",
+        "transaction_date",
+        "value_date",
+        "description",
+        "reference",
+        "debit_amount",
+        "credit_amount",
+        "balance",
+        "currency",
+        "recon_status",
+        "recon_id",
+        "source_file",
+    ]
+
+    dataframe = pd.DataFrame(transactions)
+    # Keep only columns that exist in the result (guards against schema variations)
+    available_columns = [col for col in export_columns if col in dataframe.columns]
+    dataframe = dataframe[available_columns]
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    dataframe.to_csv(output_path, index=False)
+
+    console.print(
+        f"[green]Exported {len(transactions)} transactions to[/green] {output_path}"
+    )
 
 
 @cli.command("init-db")
