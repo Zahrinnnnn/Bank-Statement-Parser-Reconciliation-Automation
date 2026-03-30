@@ -36,10 +36,72 @@ def cli(debug: bool) -> None:
 @cli.command()
 @click.option("--file",    required=True,  help="Path to the bank statement file.")
 @click.option("--bank",    required=True,  help="Bank name: CIMB, HLB, MAYBANK, PUBLIC_BANK.")
-@click.option("--account", required=False, help="Account number (optional).")
+@click.option("--account", required=False, default=None, help="Account number (optional override).")
 def parse(file: str, bank: str, account: str) -> None:
     """Parse a bank statement file and store transactions in the database."""
-    click.echo(f"[Phase 2] parse command — file: {file}, bank: {bank}")
+    from src.parsers.factory import get_parser
+    from src.database.connection import get_db
+    from src.database.models import BankTransaction
+    from src.database.queries import insert_bank_transaction, insert_audit_log
+    from src.database.models import AuditLog
+
+    # Get the right parser for this bank and file type
+    parser = get_parser(bank_name=bank, file_path=file)
+
+    # Extract metadata from the statement
+    account_number = account or parser.extract_account_number()
+    period_start, period_end = parser.extract_statement_period()
+
+    click.echo(f"Parsing {file}  [{bank}]  Account: {account_number or 'unknown'}")
+    click.echo(f"Statement period: {period_start} to {period_end}")
+
+    # Parse all transactions
+    parsed_transactions = parser.parse()
+    click.echo(f"Found {len(parsed_transactions)} transactions in file.")
+
+    # Save to database
+    new_count = 0
+    duplicate_count = 0
+
+    with get_db() as db:
+        conn = db.get_connection()
+
+        for txn in parsed_transactions:
+            bank_txn = BankTransaction(
+                bank_name=bank.upper(),
+                account_number=account_number,
+                transaction_date=txn.transaction_date,
+                value_date=txn.value_date,
+                description=txn.description,
+                reference=txn.reference,
+                debit_amount=txn.debit_amount,
+                credit_amount=txn.credit_amount,
+                balance=txn.balance,
+                raw_description=txn.raw_description,
+                source_file=file,
+                hash=txn.compute_hash(),
+            )
+
+            row_id = insert_bank_transaction(conn, bank_txn)
+            if row_id == -1:
+                duplicate_count += 1
+            else:
+                new_count += 1
+
+        # Write an audit log entry for this parse run
+        insert_audit_log(conn, AuditLog(
+            action="PARSE_FILE",
+            entity="bank_transactions",
+            details={
+                "file": file,
+                "bank": bank,
+                "found": len(parsed_transactions),
+                "inserted": new_count,
+                "duplicates": duplicate_count,
+            },
+        ))
+
+    click.echo(f"Saved: {new_count} new  |  Skipped: {duplicate_count} duplicates")
 
 
 @cli.command("import-ledger")
