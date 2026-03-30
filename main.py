@@ -205,7 +205,71 @@ def reconcile(bank: str, account: str, period: str, tolerance: float, fuzzy: flo
 @click.option("--format",   required=True, type=click.Choice(["excel", "pdf"]), help="Report format.")
 def report(recon_id: int, format: str) -> None:
     """Generate an Excel or PDF reconciliation report."""
-    click.echo(f"[Phase 7] report command — recon_id: {recon_id}, format: {format}")
+    from pathlib import Path
+    from datetime import date as date_type
+    from rich.console import Console
+    from src.database.queries import (
+        get_reconciliation,
+        list_match_details_for_reconciliation,
+        list_exceptions_for_reconciliation,
+        list_bank_transactions,
+        update_reconciliation_report_path,
+    )
+
+    console = Console()
+
+    with get_db() as db:
+        conn = db.get_connection()
+        recon = get_reconciliation(conn, recon_id)
+
+        if not recon:
+            console.print(f"[red]Reconciliation run #{recon_id} not found.[/red]")
+            return
+
+        # Fetch all the data the report generators need
+        matched_rows   = list_match_details_for_reconciliation(conn, recon_id)
+        exception_rows = list_exceptions_for_reconciliation(conn, recon_id)
+
+        # Get the full bank transaction list for this run's period
+        period_start = recon["period_start"]
+        period_end   = recon["period_end"]
+        if isinstance(period_start, str):
+            period_start = date_type.fromisoformat(period_start)
+        if isinstance(period_end, str):
+            period_end = date_type.fromisoformat(period_end)
+
+        all_bank_txns = list_bank_transactions(
+            conn,
+            bank_name=recon["bank_name"],
+            account_number=recon.get("account_number"),
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+        output_path = Path("data/reports") / f"recon_{recon_id}_report.{format}"
+
+        if format == "excel":
+            from src.reports.excel_report import generate_excel_report
+            report_path = generate_excel_report(
+                recon=dict(recon),
+                matched_rows=matched_rows,
+                exception_rows=exception_rows,
+                all_bank_txns=all_bank_txns,
+                output_path=output_path,
+            )
+        else:
+            from src.reports.pdf_report import generate_pdf_report
+            report_path = generate_pdf_report(
+                recon=dict(recon),
+                matched_rows=matched_rows,
+                exception_rows=exception_rows,
+                output_path=output_path,
+            )
+
+        # Record the report file path on the reconciliation run so it can be found later
+        update_reconciliation_report_path(conn, recon_id, str(report_path))
+
+    console.print(f"[green]Report saved:[/green] {report_path}")
 
 
 @cli.command()
@@ -234,7 +298,70 @@ def history(bank: str, limit: int) -> None:
 @click.option("--recon-id", required=True, type=int, help="Reconciliation run ID.")
 def exceptions(recon_id: int) -> None:
     """View exception items from a reconciliation run."""
-    click.echo(f"[Phase 6] exceptions command — recon_id: {recon_id}")
+    from rich.console import Console
+    from rich.table import Table
+    from src.database.queries import (
+        get_reconciliation,
+        list_exceptions_for_reconciliation,
+    )
+
+    console = Console()
+
+    with get_db() as db:
+        conn = db.get_connection()
+        recon = get_reconciliation(conn, recon_id)
+
+        if not recon:
+            console.print(f"[red]Reconciliation run #{recon_id} not found.[/red]")
+            return
+
+        exception_rows = list_exceptions_for_reconciliation(conn, recon_id)
+
+    if not exception_rows:
+        console.print(f"[green]No exceptions for reconciliation #{recon_id}.[/green]")
+        return
+
+    # Build a colour-coded table so each exception type stands out at a glance
+    EXCEPTION_TYPE_COLOURS = {
+        "BANK_ONLY":       "yellow",
+        "LEDGER_ONLY":     "cyan",
+        "LARGE_UNMATCHED": "red",
+        "DUPLICATE_BANK":  "magenta",
+        "AMOUNT_MISMATCH": "orange3",
+        "DATE_MISMATCH":   "blue",
+    }
+
+    table = Table(
+        title=(
+            f"Exceptions — Reconciliation #{recon_id}  "
+            f"({recon['bank_name']}  "
+            f"{recon['period_start']} to {recon['period_end']})"
+        ),
+        show_lines=True,
+    )
+    table.add_column("Type",        style="bold",   no_wrap=True)
+    table.add_column("Source",      no_wrap=True)
+    table.add_column("Date",        no_wrap=True)
+    table.add_column("Description", min_width=30)
+    table.add_column("Amount (RM)", justify="right")
+    table.add_column("Reference")
+
+    for row in exception_rows:
+        exception_type = row["exception_type"] or "UNKNOWN"
+        colour         = EXCEPTION_TYPE_COLOURS.get(exception_type, "white")
+        amount_display = f"{row['amount']:,.2f}" if row["amount"] else "—"
+
+        table.add_row(
+            f"[{colour}]{exception_type}[/{colour}]",
+            row["source"],
+            str(row["txn_date"]),
+            row["description"] or "—",
+            amount_display,
+            row["reference"] or "—",
+        )
+
+    console.print(table)
+    console.print(f"\nTotal exceptions: [bold]{len(exception_rows)}[/bold]")
 
 
 @cli.command()

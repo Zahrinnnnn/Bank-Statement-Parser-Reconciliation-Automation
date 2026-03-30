@@ -271,12 +271,27 @@ def run_reconciliation(
         update_bank_transaction_recon_status(conn, bank_txn["id"], "MATCHED", recon_id)
         update_ledger_entry_recon_status(conn, ledger_entry["id"], "MATCHED", recon_id)
 
-    # Mark unmatched items
+    # Build a lookup so each unmatched bank transaction gets the right exception
+    # category (BANK_ONLY vs LARGE_UNMATCHED) stored on its recon_status field.
+    # We exclude DUPLICATE_BANK here because duplicates are handled separately below.
+    bank_exception_by_txn_id: dict[int, str] = {
+        exc.bank_txn_id: exc.exception_type
+        for exc in all_exceptions
+        if exc.bank_txn_id is not None and exc.exception_type != "DUPLICATE_BANK"
+    }
+
     for bank_txn in unmatched_bank_txns:
-        update_bank_transaction_recon_status(conn, bank_txn["id"], "UNMATCHED")
+        exception_type = bank_exception_by_txn_id.get(bank_txn["id"], "BANK_ONLY")
+        update_bank_transaction_recon_status(conn, bank_txn["id"], exception_type, recon_id)
 
     for ledger_entry in unmatched_ledger_entries:
-        update_ledger_entry_recon_status(conn, ledger_entry["id"], "UNMATCHED")
+        update_ledger_entry_recon_status(conn, ledger_entry["id"], "LEDGER_ONLY", recon_id)
+
+    # Mark duplicate bank transactions with their own category so they can be
+    # distinguished from regular unmatched items in the exceptions view.
+    for exc in duplicate_exceptions:
+        if exc.bank_txn_id is not None:
+            update_bank_transaction_recon_status(conn, exc.bank_txn_id, "DUPLICATE_BANK", recon_id)
 
     # --- Step 7: Audit log entry --------------------------------------------
 

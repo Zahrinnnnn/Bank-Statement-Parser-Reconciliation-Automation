@@ -492,3 +492,174 @@ class TestReconciliationEngine:
         assert "CIMB" in summary
         assert "Matched" in summary
         assert "Unmatched" in summary
+
+
+# ===========================================================================
+# Phase 6 — Exception DB persistence and list_exceptions_for_reconciliation
+# ===========================================================================
+
+class TestExceptionPersistence:
+    """
+    Verify that exception categories are stored on bank_transactions and
+    ledger_entries rows, and that list_exceptions_for_reconciliation retrieves
+    them correctly.
+    """
+
+    def setup_method(self):
+        """Fresh in-memory database for each test."""
+        from pathlib import Path
+        self.db = DatabaseConnection(db_path=Path(":memory:"))
+        self.db.connect()
+        self.db.initialise_schema()
+        self.conn = self.db.get_connection()
+        self._load_sample_data()
+
+    def teardown_method(self):
+        self.db.close()
+
+    def _load_sample_data(self):
+        """Same sample data as TestReconciliationEngine."""
+        bank_txns = [
+            BankTransaction(
+                bank_name="CIMB", account_number="1234567890",
+                transaction_date=date(2026, 3, 3),
+                description="FPX SHOPEE PAYMENT", reference="FPX2026001",
+                debit_amount=250.0, credit_amount=0.0,
+                source_file="test.csv", hash="hash_shopee",
+            ),
+            BankTransaction(
+                bank_name="CIMB", account_number="1234567890",
+                transaction_date=date(2026, 3, 5),
+                description="SALARY CREDIT ACME SDN BHD", reference=None,
+                debit_amount=0.0, credit_amount=3500.0,
+                source_file="test.csv", hash="hash_salary",
+            ),
+            BankTransaction(
+                bank_name="CIMB", account_number="1234567890",
+                transaction_date=date(2026, 3, 8),
+                description="IBG TRANSFER OUT", reference="IBG20260308",
+                debit_amount=1000.0, credit_amount=0.0,
+                source_file="test.csv", hash="hash_ibg",
+            ),
+            # This transaction has no ledger match — should become BANK_ONLY
+            BankTransaction(
+                bank_name="CIMB", account_number="1234567890",
+                transaction_date=date(2026, 3, 20),
+                description="UNKNOWN PAYMENT NO LEDGER MATCH", reference=None,
+                debit_amount=99.0, credit_amount=0.0,
+                source_file="test.csv", hash="hash_unknown",
+            ),
+        ]
+        for txn in bank_txns:
+            insert_bank_transaction(self.conn, txn)
+
+        ledger_entries = [
+            LedgerEntry(
+                entry_date=date(2026, 3, 3), description="Shopee Payment March",
+                reference="FPX2026001", amount=250.0, entry_type="DEBIT",
+            ),
+            LedgerEntry(
+                entry_date=date(2026, 3, 5), description="Salary March 2026",
+                reference="PAYROLL-MAR-26", amount=3500.0, entry_type="CREDIT",
+            ),
+            LedgerEntry(
+                entry_date=date(2026, 3, 8), description="Transfer to Ahmad Ali",
+                reference="IBG20260308", amount=1000.0, entry_type="DEBIT",
+            ),
+            # This ledger entry has no bank match — should become LEDGER_ONLY
+            LedgerEntry(
+                entry_date=date(2026, 3, 15),
+                description="Outstanding ledger entry with no bank match",
+                reference=None, amount=500.0, entry_type="DEBIT",
+            ),
+        ]
+        for entry in ledger_entries:
+            insert_ledger_entry(self.conn, entry)
+
+    def _run(self, **kwargs):
+        from src.reconciliation.engine import run_reconciliation
+        return run_reconciliation(
+            conn=self.conn,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 3, 31),
+            bank_name="CIMB",
+            account_number="1234567890",
+            **kwargs,
+        )
+
+    def test_unmatched_bank_txn_stored_as_bank_only(self):
+        """The UNKNOWN PAYMENT bank transaction should have recon_status BANK_ONLY."""
+        from src.database.queries import list_bank_transactions
+        self._run()
+        unmatched = list_bank_transactions(self.conn, recon_status="BANK_ONLY")
+        assert len(unmatched) == 1
+        assert "UNKNOWN" in unmatched[0]["description"]
+
+    def test_unmatched_ledger_entry_stored_as_ledger_only(self):
+        """The outstanding ledger entry should have recon_status LEDGER_ONLY."""
+        from src.database.queries import list_ledger_entries
+        self._run()
+        unmatched = list_ledger_entries(self.conn, recon_status="LEDGER_ONLY")
+        assert len(unmatched) == 1
+        assert "Outstanding" in unmatched[0]["description"]
+
+    def test_large_unmatched_bank_txn_stored_as_large_unmatched(self):
+        """A big unmatched bank transaction should have recon_status LARGE_UNMATCHED."""
+        # Insert an extra large transaction with no ledger counterpart
+        insert_bank_transaction(self.conn, BankTransaction(
+            bank_name="CIMB", account_number="1234567890",
+            transaction_date=date(2026, 3, 25),
+            description="LARGE MYSTERY PAYMENT", reference=None,
+            debit_amount=9999.0, credit_amount=0.0,
+            source_file="test.csv", hash="hash_large",
+        ))
+        from src.database.queries import list_bank_transactions
+        self._run(large_amount_threshold=5000.0)
+        large_exceptions = list_bank_transactions(self.conn, recon_status="LARGE_UNMATCHED")
+        assert len(large_exceptions) == 1
+        assert "LARGE" in large_exceptions[0]["description"]
+
+    def test_matched_bank_txns_are_not_in_exceptions(self):
+        """Matched transactions must not appear in the exceptions query results."""
+        from src.database.queries import list_exceptions_for_reconciliation
+        result = self._run()
+        exceptions = list_exceptions_for_reconciliation(self.conn, result.recon_id)
+        # No exception row should have SHOPEE, SALARY, or IBG (those are matched)
+        descriptions = [row["description"] for row in exceptions]
+        assert not any("SHOPEE" in d for d in descriptions)
+        assert not any("SALARY" in d for d in descriptions)
+        assert not any("IBG" in d for d in descriptions)
+
+    def test_list_exceptions_returns_bank_and_ledger_rows(self):
+        """list_exceptions_for_reconciliation should return one BANK and one LEDGER row."""
+        from src.database.queries import list_exceptions_for_reconciliation
+        result = self._run()
+        exceptions = list_exceptions_for_reconciliation(self.conn, result.recon_id)
+        sources = {row["source"] for row in exceptions}
+        assert "BANK" in sources
+        assert "LEDGER" in sources
+
+    def test_list_exceptions_exception_types_are_correct(self):
+        """Exception types in the query result must match the exception categories."""
+        from src.database.queries import list_exceptions_for_reconciliation
+        result = self._run()
+        exceptions = list_exceptions_for_reconciliation(self.conn, result.recon_id)
+        types = {row["exception_type"] for row in exceptions}
+        assert "BANK_ONLY" in types
+        assert "LEDGER_ONLY" in types
+        assert "MATCHED" not in types
+
+    def test_list_exceptions_total_count(self):
+        """Two unmatched items means two exception rows."""
+        from src.database.queries import list_exceptions_for_reconciliation
+        result = self._run()
+        exceptions = list_exceptions_for_reconciliation(self.conn, result.recon_id)
+        assert len(exceptions) == 2
+
+    def test_list_exceptions_ordered_by_date(self):
+        """Exceptions should be returned in ascending date order."""
+        from src.database.queries import list_exceptions_for_reconciliation
+        result = self._run()
+        exceptions = list_exceptions_for_reconciliation(self.conn, result.recon_id)
+        dates = [row["txn_date"] for row in exceptions]
+        assert dates == sorted(dates)

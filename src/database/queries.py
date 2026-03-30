@@ -354,6 +354,107 @@ def list_matches_for_reconciliation(
     return [dict(row) for row in rows]
 
 
+def list_exceptions_for_reconciliation(
+    conn: sqlite3.Connection, recon_id: int
+) -> list[dict]:
+    """
+    Fetch all exception items for one reconciliation run.
+
+    Queries both bank_transactions and ledger_entries for rows belonging to
+    this recon_id that are NOT MATCHED.  The results are unified into a single
+    list with a consistent set of columns so the CLI and UI can display them in
+    one table without knowing which source table each row came from.
+
+    Returned dict keys:
+        source          'BANK' or 'LEDGER'
+        exception_type  e.g. BANK_ONLY, LEDGER_ONLY, LARGE_UNMATCHED, DUPLICATE_BANK
+        txn_date        transaction_date or entry_date as a string
+        description
+        amount          debit+credit for bank rows, absolute amount for ledger rows
+        reference
+        bank_txn_id     row id from bank_transactions (None for LEDGER rows)
+        ledger_entry_id row id from ledger_entries (None for BANK rows)
+    """
+    sql = """
+        SELECT
+            'BANK'                                        AS source,
+            recon_status                                  AS exception_type,
+            transaction_date                              AS txn_date,
+            description,
+            (debit_amount + credit_amount)                AS amount,
+            reference,
+            id                                            AS bank_txn_id,
+            NULL                                          AS ledger_entry_id
+        FROM bank_transactions
+        WHERE recon_id = :recon_id
+          AND recon_status != 'MATCHED'
+
+        UNION ALL
+
+        SELECT
+            'LEDGER'                                      AS source,
+            recon_status                                  AS exception_type,
+            entry_date                                    AS txn_date,
+            description,
+            ABS(amount)                                   AS amount,
+            reference,
+            NULL                                          AS bank_txn_id,
+            id                                            AS ledger_entry_id
+        FROM ledger_entries
+        WHERE recon_id = :recon_id
+          AND recon_status != 'MATCHED'
+
+        ORDER BY txn_date
+    """
+    rows = conn.execute(sql, {"recon_id": recon_id}).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_match_details_for_reconciliation(
+    conn: sqlite3.Connection, recon_id: int
+) -> list[dict]:
+    """
+    Fetch full match details for a reconciliation run, joining bank and ledger data.
+
+    Returns one row per matched pair with columns from both source tables so
+    report generators have everything they need in a single query.
+
+    Returned dict keys:
+        match_id, match_type, confidence_score, matched_by, matched_at,
+        bank_txn_id, bank_date, bank_description, debit_amount, credit_amount,
+        bank_reference,
+        ledger_entry_id, ledger_date, ledger_description, ledger_amount,
+        ledger_entry_type, ledger_reference
+    """
+    sql = """
+        SELECT
+            rm.id                   AS match_id,
+            rm.match_type,
+            rm.confidence_score,
+            rm.matched_by,
+            rm.matched_at,
+            bt.id                   AS bank_txn_id,
+            bt.transaction_date     AS bank_date,
+            bt.description          AS bank_description,
+            bt.debit_amount,
+            bt.credit_amount,
+            bt.reference            AS bank_reference,
+            le.id                   AS ledger_entry_id,
+            le.entry_date           AS ledger_date,
+            le.description          AS ledger_description,
+            le.amount               AS ledger_amount,
+            le.entry_type           AS ledger_entry_type,
+            le.reference            AS ledger_reference
+        FROM reconciliation_matches rm
+        LEFT JOIN bank_transactions bt ON rm.bank_txn_id      = bt.id
+        LEFT JOIN ledger_entries    le ON rm.ledger_entry_id  = le.id
+        WHERE rm.recon_id = :recon_id
+        ORDER BY bt.transaction_date
+    """
+    rows = conn.execute(sql, {"recon_id": recon_id}).fetchall()
+    return [dict(row) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # audit_log
 # ---------------------------------------------------------------------------
