@@ -4,31 +4,45 @@ app.py — Streamlit web UI entry point.
 Run with:
     streamlit run app.py
 
-Phase 9 will fill in the individual pages. For now this just confirms
-the app starts and the database is accessible.
+Navigation is handled through the sidebar. Each page lives in ui/pages/
+and exposes a single render() function that this file calls.
 """
 
 import streamlit as st
-from src.utils.logger import setup_logging
-from src.database.connection import get_db
 
+from src.utils.logger import setup_logging
+from ui.components.sidebar import render_sidebar
+
+# Set up file + console logging before anything else runs
 setup_logging()
 
 st.set_page_config(
     page_title="Bank Statement Reconciliation",
     page_icon="🏦",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("Bank Statement Parser & Reconciliation")
-st.caption("Phase 1 — Database layer ready. UI pages coming in Phase 9.")
+# Render the sidebar and find out which page the user selected
+active_page = render_sidebar()
 
-# Quick health check — show the database path and table list
-with get_db() as db:
-    conn = db.get_connection()
-    tables = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
-    table_names = [row["name"] for row in tables]
+# Route to the correct page module
+if active_page == "Upload":
+    from ui.pages.upload import render
+    render()
 
-st.success(f"Database connected. Tables: {', '.join(table_names)}")
+elif active_page == "Transactions":
+    from ui.pages.transactions import render
+    render()
+
+elif active_page == "Reconcile":
+    from ui.pages.reconcile import render
+    render()
+
+elif active_page == "Reports":
+    from ui.pages.reports import render
+    render()
+
+elif active_page == "Exceptions":
+    from ui.pages.exceptions import render
+    render()
