@@ -56,46 +56,46 @@ Sample files to test with are in the `tests/fixtures/` folder of this repository
 ### 1. Upload Bank Statement
 Upload a PDF, CSV, or Excel statement from any supported bank. The parser auto-detects the account number and statement period.
 
-![Upload Bank Statement](1.PNG)
+![Upload Bank Statement](src/images/1.PNG)
 
 ---
 
 ### 2. Import Internal Ledger
 Upload your accounting ledger as a CSV with a live preview before importing. Includes a downloadable template and row-level error reporting.
 
-![Import Ledger](2.PNG)
+![Import Ledger](src/images/2.PNG)
 
 ---
 
 ### 3 & 4. Transaction Browser
 Browse all parsed transactions across banks with filters by bank, account, date range, and reconciliation status. Net cash flow calculated automatically.
 
-![Transactions](3.PNG)
+![Transactions](src/images/3.PNG)
 
-![Transactions filtered](4.PNG)
+![Transactions filtered](src/images/4.PNG)
 
 ---
 
 ### 5. Reconciliation Engine
 Run automated matching with configurable tolerance, fuzzy threshold, and large-amount threshold. Results show matched count, match rate, and exception breakdown instantly.
 
-![Reconcile](5.PNG)
+![Reconcile](src/images/5.PNG)
 
 ---
 
 ### 6. Report Generation
 Select a reconciliation run and download a formatted Excel workbook or PDF executive summary — ready for audit or management review.
 
-![Reports](6.PNG)
+![Reports](src/images/6.PNG)
 
 ---
 
 ### 7 & 8. Exception Viewer
 All unmatched and flagged items in one view. Filter by exception type, drill into each item, and reference the built-in exception type legend.
 
-![Exceptions](7.PNG)
+![Exceptions](src/images/7.PNG)
 
-![Exception reference](8.PNG)
+![Exception reference](src/images/8.PNG)
 
 ---
 
