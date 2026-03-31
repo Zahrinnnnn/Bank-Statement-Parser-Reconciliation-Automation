@@ -1,0 +1,6 @@
+date,description,amount,entry_type,reference,account_code,counterparty
+2026-03-01,Payment to Vendor ABC,1500.00,DEBIT,INV-001,5000,ABC Sdn Bhd
+2026-03-02,Customer Payment XYZ,3200.00,CREDIT,REC-045,4000,XYZ Trading
+2026-03-05,Utility Bill TNB,450.00,DEBIT,BILL-012,6100,Tenaga Nasional
+2026-03-10,Salary Payment,8000.00,DEBIT,SAL-MAR,6200,Staff
+2026-03-15,Sales Collection,5500.00,CREDIT,SO-0089,4000,Customer A
