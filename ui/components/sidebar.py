@@ -15,6 +15,7 @@ import streamlit as st
 # Pages in the order they appear in the sidebar
 PAGES = [
     ("Upload",       "📤"),
+    ("Ledger",       "📒"),
     ("Transactions", "📋"),
     ("Reconcile",    "🔄"),
     ("Reports",      "📊"),

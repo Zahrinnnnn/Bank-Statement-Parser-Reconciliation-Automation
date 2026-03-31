@@ -31,6 +31,10 @@ if active_page == "Upload":
     from ui.pages.upload import render
     render()
 
+elif active_page == "Ledger":
+    from ui.pages.ledger import render
+    render()
+
 elif active_page == "Transactions":
     from ui.pages.transactions import render
     render()
